@@ -218,7 +218,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Undervalued Stock Scanner &mdash; Results</title>
+<title>Yo Value Scanner &mdash; Results</title>
 <style>
   :root {{
     color-scheme: light;
@@ -367,7 +367,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="accent">&#9679;</span> Undervalued Stock Scanner</h1>
+  <h1><span class="accent">&#9679;</span> Yo Value Scanner</h1>
   <p class="subtitle">Generated {generated_at} &middot; universe: {universe} &middot; {n_scanned} tickers scanned</p>
 
   <div class="banner">{banner}</div>
