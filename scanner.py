@@ -31,6 +31,10 @@ import numpy as np
 import pandas as pd
 import requests
 
+from html_report import write_html_report
+
+SPARKLINE_DAYS = 120
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -141,6 +145,12 @@ def _extract_metrics(ticker: str, info: dict, hist: pd.DataFrame) -> dict:
         if len(hist_pe_series):
             hist_pe_median = float(hist_pe_series.median())
 
+    # Last ~120 trading days of closes for the report's per-ticker sparkline.
+    # Reuses the 5y `hist` pull above -- no extra network call. Stored as a
+    # ';'-joined string (not a list) so it round-trips cleanly through the
+    # scan_checkpoint.csv resume file.
+    sparkline_prices = ";".join(f"{v:.2f}" for v in close.tail(SPARKLINE_DAYS))
+
     market_cap = info.get("marketCap")
     fcf = info.get("freeCashflow")
     fcf_yield = (fcf / market_cap) if (fcf and market_cap) else None
@@ -171,6 +181,7 @@ def _extract_metrics(ticker: str, info: dict, hist: pd.DataFrame) -> dict:
         normal_avg_volume=normal_vol,
         volume_ratio=vol_ratio,
         historical_median_pe=hist_pe_median,
+        sparkline_prices=sparkline_prices,
     )
 
 
@@ -277,158 +288,23 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values("composite_score", ascending=False)
 
 
-def write_html_report(df: pd.DataFrame, out_path: str, universe_label: str, n_total_universe: int | None):
-    html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Undervalued Tickers Dashboard</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #0f172a; color: #f8fafc; }}
-        .header {{ background: #1e293b; padding: 25px 30px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }}
-        h1 {{ margin: 0; font-size: 24px; color: #38bdf8; }}
-        .subtitle {{ color: #94a3b8; font-size: 13px; margin-top: 5px; }}
-        .stats-bar {{ display: flex; gap: 20px; padding: 20px 30px; background: #111827; }}
-        .stat-card {{ background: #1f2937; padding: 15px 20px; border-radius: 8px; border: 1px solid #374151; flex: 1; }}
-        .stat-val {{ font-size: 22px; font-weight: bold; color: #38bdf8; }}
-        .stat-label {{ font-size: 12px; color: #9ca3af; text-transform: uppercase; margin-top: 4px; }}
-        
-        /* Column Header Index Legend */
-        .legend-box {{ background: #1e293b; margin: 20px 30px; padding: 15px 20px; border-radius: 8px; border: 1px solid #334155; }}
-        .legend-box h3 {{ margin: 0 0 10px 0; font-size: 14px; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; }}
-        .legend-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 15px; font-size: 12px; color: #cbd5e1; }}
-        .legend-item b {{ color: #38bdf8; }}
-
-        .table-container {{ margin: 20px 30px; background: #1e293b; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }}
-        table {{ border-collapse: collapse; width: 100%; white-space: nowrap; }}
-        th, td {{ padding: 12px 14px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }}
-        th {{ background: #0f172a; color: #cbd5e1; position: sticky; top: 0; z-index: 2; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }}
-        tr:hover {{ background: #273548; }}
-        .score-badge {{ background: #0369a1; color: #e0f2fe; padding: 4px 8px; border-radius: 6px; font-weight: bold; text-align: center; }}
-        .blurb-text {{ font-size: 12px; color: #94a3b8; max-width: 350px; white-space: normal; line-height: 1.4; }}
-        .flag-good {{ color: #4ade80; background: rgba(74, 222, 128, 0.1); text-align: center; font-weight: bold; border-radius: 4px; }}
-        .flag-mid {{ color: #facc15; background: rgba(250, 204, 21, 0.1); text-align: center; border-radius: 4px; }}
-        .flag-bad {{ color: #f87171; background: rgba(248, 113, 113, 0.1); text-align: center; border-radius: 4px; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div>
-            <h1>Undervalued Tickers Executive Dashboard</h1>
-            <div class="subtitle">Universe: <b>{universe_label.upper()}</b> | Total Analyzed: {n_total_universe if n_total_universe else len(df)} Tickers</div>
-        </div>
-    </div>
-
-    <div class="stats-bar">
-        <div class="stat-card">
-            <div class="stat-val">{len(df)}</div>
-            <div class="stat-label">Shortlisted Tickers</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-val">{df['composite_score'].max():.1f}</div>
-            <div class="stat-label">Max Composite Score</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-val">{df['composite_score'].median():.1f}</div>
-            <div class="stat-label">Median Composite Score</div>
-        </div>
-    </div>
-
-    <div class="legend-box">
-        <h3>Column Header Index & Definitions</h3>
-        <div class="legend-grid">
-            <div class="legend-item"><b>Score:</b> Composite 0-100 valuation rating (weighted 2x core criteria, 1x secondary).</div>
-            <div class="legend-item"><b>P/E:</b> Trailing Price-to-Earnings ratio.</div>
-            <div class="legend-item"><b>Hist P/E Med:</b> Stock's own ~5 year historical median P/E baseline.</div>
-            <div class="legend-item"><b>Vol Ratio:</b> Recent 15-day volume divided by 252-day normal average.</div>
-            <div class="legend-item"><b>Drawdown:</b> Percentage distance below 52-week high price peak.</div>
-            <div class="legend-item"><b>PEG:</b> Price/Earnings-to-Growth valuation ratio.</div>
-            <div class="legend-item"><b>Fwd P/E:</b> Forward expected earnings P/E ratio.</div>
-            <div class="legend-item"><b>FCF Yield:</b> Free cash flow divided by total market capitalization.</div>
-            <div class="legend-item"><b>D/E:</b> Total debt-to-equity leverage ratio.</div>
-            <div class="legend-item"><b>ROE:</b> Return on equity profitability metric.</div>
-            <div class="legend-item"><b>Rationale Blurb:</b> Automated breakdown explaining why the stock scored well.</div>
-        </div>
-    </div>
-
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>Ticker</th>
-                    <th>Company</th>
-                    <th>Sector</th>
-                    <th>Price</th>
-                    <th style="text-align: center;">Score</th>
-                    <th>P/E</th>
-                    <th>Hist P/E Med</th>
-                    <th>Vol Ratio</th>
-                    <th>Drawdown</th>
-                    <th>PEG</th>
-                    <th>Fwd P/E</th>
-                    <th>FCF Yield</th>
-                    <th>D/E</th>
-                    <th>ROE</th>
-                    <th>Why It Scored This Way (Rationale)</th>
-                    <th>Manual Check</th>
-                </tr>
-            </thead>
-            <tbody>
-"""
-
-    def render_flag(val):
-        if pd.isna(val): return "<td>-</td>"
-        vf = float(val)
-        cls = "flag-good" if vf >= 1.0 else ("flag-mid" if vf >= 0.5 else "flag-bad")
-        return f'<td class="{cls}">{vf:.1f}</td>'
-
-    for _, r in df.iterrows():
-        t = r.get("ticker", "")
-        comp = r.get("company", "") or ""
-        sec = r.get("sector", "") or ""
-        price = f"${r['price']:.2f}" if pd.notna(r.get("price")) else "N/A"
-        score = f"{r.get('composite_score', 0):.1f}"
-        pe = f"{r.get('trailing_pe', np.nan):.1f}" if pd.notna(r.get("trailing_pe")) else "N/A"
-        h_med = f"{r.get('historical_median_pe', np.nan):.1f}" if pd.notna(r.get("historical_median_pe")) else "N/A"
-        v_rat = f"{r.get('volume_ratio', np.nan):.2f}" if pd.notna(r.get("volume_ratio")) else "N/A"
-        dd = f"{r.get('drawdown_from_high', 0)*100:.1f}%" if pd.notna(r.get("drawdown_from_high")) else "N/A"
-        peg = f"{r.get('peg', np.nan):.2f}" if pd.notna(r.get("peg")) else "N/A"
-        fwd = f"{r.get('forward_pe', np.nan):.1f}" if pd.notna(r.get("forward_pe")) else "N/A"
-        fcf = f"{r.get('fcf_yield', 0)*100:.1f}%" if pd.notna(r.get("fcf_yield")) else "N/A"
-        de = f"{r.get('debt_equity', np.nan):.2f}" if pd.notna(r.get("debt_equity")) else "N/A"
-        roe = f"{r.get('roe', 0)*100:.1f}%" if pd.notna(r.get("roe")) else "N/A"
-        blurb = r.get("score_blurb", "")
-        review = r.get("needs_manual_review", "")
-
-        html_content += f"""
-            <tr>
-                <td><b>{t}</b></td>
-                <td>{comp}</td>
-                <td>{sec}</td>
-                <td>{price}</td>
-                <td><div class="score-badge">{score}</div></td>
-                <td>{pe}</td>
-                <td>{h_med}</td>
-                <td>{v_rat}</td>
-                <td>{dd}</td>
-                <td>{peg}</td>
-                <td>{fwd}</td>
-                <td>{fcf}</td>
-                <td>{de}</td>
-                <td>{roe}</td>
-                <td><div class="blurb-text">{blurb}</div></td>
-                <td style="color: #94a3b8; font-size: 11px;">{review}</td>
-            </tr>
-"""
-
-    html_content += """
-            </tbody>
-        </table>
-    </div>
-</body>
-</html>
-"""
-    Path(out_path).write_text(html_content, encoding="utf-8")
+def _demo_sparkline(end_price: float, drawdown_from_high: float, seed: int, days: int = SPARKLINE_DAYS) -> str:
+    """--demo makes no network calls (that's the point), so it has no real
+    5y price history to slice a sparkline from. This fabricates a plausible
+    ~120-session random walk that starts near the stock's 52w high and glides
+    down to its current (demo) price -- just enough to exercise the same
+    rendering path a live scan's real yfinance history takes.
+    """
+    rng = random.Random(seed)
+    start_price = end_price / (1.0 - min(max(drawdown_from_high or 0.0, 0.0), 0.6))
+    prices = [start_price]
+    for i in range(1, days):
+        target = start_price + (end_price - start_price) * (i / (days - 1))
+        noise = prices[-1] * rng.uniform(-0.015, 0.015)
+        nxt = 0.7 * target + 0.3 * (prices[-1] + noise)
+        prices.append(max(nxt, 0.01))
+    prices[-1] = end_price
+    return ";".join(f"{p:.2f}" for p in prices)
 
 
 def demo_dataframe() -> pd.DataFrame:
@@ -437,6 +313,8 @@ def demo_dataframe() -> pd.DataFrame:
         dict(ticker="CNC", company="Centene Corporation", sector="Healthcare", market_cap=32.855e9, price=66.54, trailing_pe=12.4, forward_pe=14.44, peg=0.38, pb=1.48, debt_equity=0.71, roe=0.10, dividend_yield=None, payout_ratio=None, short_pct_float=0.0296, fcf_yield=0.05, fifty2wk_high=78.0, drawdown_from_high=0.147, recent_avg_volume=5017450, normal_avg_volume=5803495, volume_ratio=0.865, historical_median_pe=20.5),
         dict(ticker="APA", company="APA Corporation", sector="Energy", market_cap=12.778e9, price=36.15, trailing_pe=8.57, forward_pe=9.58, peg=None, pb=2.02, debt_equity=0.49, roe=0.2666, dividend_yield=0.0247, payout_ratio=0.2117, short_pct_float=0.0864, fcf_yield=0.11, fifty2wk_high=44.0, drawdown_from_high=0.178, recent_avg_volume=5506362, normal_avg_volume=5860269, volume_ratio=0.940, historical_median_pe=9.8),
     ]
+    for i, row in enumerate(rows):
+        row["sparkline_prices"] = _demo_sparkline(row["price"], row["drawdown_from_high"], seed=i)
     return pd.DataFrame(rows)
 
 
@@ -472,7 +350,13 @@ def main():
 
     scored = score_universe(raw)
     top = scored.head(args.top)
-    write_html_report(top, args.output, universe_label="demo sample" if args.demo else args.universe, n_total_universe=len(scored) if not args.demo else None)
+    write_html_report(
+        top,
+        args.output,
+        universe_label="demo sample" if args.demo else args.universe,
+        is_demo=args.demo,
+        n_total_universe=len(scored) if not args.demo else None,
+    )
     print(f"\nDashboard generated successfully at: {args.output}\n")
 
 
