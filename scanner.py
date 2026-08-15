@@ -65,13 +65,41 @@ PULLBACK_LO, PULLBACK_HI = 0.10, 0.20
 NASDAQ_LISTED_URL = "https://ftp.nasdaqtrader.com/dynamiclookup/nasdaqlisted.txt"
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
+UNIVERSE_FETCH_RETRIES = 3
+UNIVERSE_FETCH_TIMEOUT = 45
+
+
+def _http_get_with_retries(url: str, headers: dict, name: str, retries: int = UNIVERSE_FETCH_RETRIES,
+                            timeout: int = UNIVERSE_FETCH_TIMEOUT, backoff: float = 2.0):
+    """Both universe-list sources are single third-party endpoints hit once
+    per run (unlike the per-ticker yfinance calls, which already retry) --
+    so a single connect-timeout from a flaky host (nasdaqtrader.com in
+    particular has an inconsistent uptime record from GitHub-hosted runner
+    IPs) used to take the whole run down. Retry with backoff here first;
+    build_universe() below still degrades gracefully if every attempt fails.
+    """
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            last_err = exc
+            wait = backoff ** attempt + random.random()
+            log.warning("%s: attempt %d/%d failed (%s)%s", name, attempt + 1, retries, exc,
+                        f"; retrying in {wait:.1f}s" if attempt < retries - 1 else "; giving up")
+            if attempt < retries - 1:
+                time.sleep(wait)
+    assert last_err is not None
+    raise last_err
+
 
 def get_sp500_tickers() -> list[str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    resp = requests.get(SP500_WIKI_URL, headers=headers, timeout=30)
-    resp.raise_for_status()
+    resp = _http_get_with_retries(SP500_WIKI_URL, headers, name="S&P 500 list (Wikipedia)")
     tables = pd.read_html(io.StringIO(resp.text))
     df = tables[0]
     tickers = df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False)
@@ -82,8 +110,7 @@ def get_nasdaq_composite_tickers() -> list[str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    resp = requests.get(NASDAQ_LISTED_URL, headers=headers, timeout=30)
-    resp.raise_for_status()
+    resp = _http_get_with_retries(NASDAQ_LISTED_URL, headers, name="Nasdaq Composite list (nasdaqtrader.com)")
     lines = [l for l in resp.text.splitlines() if l and not l.startswith("File Creation")]
     df = pd.read_csv(io.StringIO("\n".join(lines)), sep="|")
     df = df[(df["Test Issue"] == "N") & (df["ETF"] == "N")]
@@ -98,7 +125,34 @@ def build_universe(name: str) -> list[str]:
     if name == "nasdaq":
         return get_nasdaq_composite_tickers()
     if name == "both":
-        return sorted(set(get_sp500_tickers()) | set(get_nasdaq_composite_tickers()))
+        # Two independent third-party sources -- don't let one flaky host
+        # sink the whole "both" run. Each is retried on its own above; if a
+        # source still fails after retries, log it and scan whatever
+        # universe(s) did come through instead of exiting with nothing.
+        sp500: list[str] = []
+        nasdaq: list[str] = []
+        sp500_err: Exception | None = None
+        nasdaq_err: Exception | None = None
+        try:
+            sp500 = get_sp500_tickers()
+        except Exception as exc:
+            sp500_err = exc
+            log.warning("S&P 500 universe fetch failed after retries, continuing without it: %s", exc)
+        try:
+            nasdaq = get_nasdaq_composite_tickers()
+        except Exception as exc:
+            nasdaq_err = exc
+            log.warning("Nasdaq Composite universe fetch failed after retries, continuing without it: %s", exc)
+
+        if not sp500 and not nasdaq:
+            raise RuntimeError(
+                f"Both universe sources failed -- sp500: {sp500_err}; nasdaq: {nasdaq_err}"
+            )
+        if sp500_err or nasdaq_err:
+            missing = ("S&P 500" if sp500_err else "") + (" and " if sp500_err and nasdaq_err else "") + ("Nasdaq Composite" if nasdaq_err else "")
+            print(f"WARNING: 'both' universe is missing {missing} this run (source unreachable) -- "
+                  f"scanning {'only ' if (sp500_err or nasdaq_err) else ''}what did come through.", file=sys.stderr)
+        return sorted(set(sp500) | set(nasdaq))
     raise ValueError(f"unknown universe {name!r}")
 
 
