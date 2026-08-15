@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Undervalued Stock Scanner &mdash; Results</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb;
+    --plane: #f9f9f7;
+    --ink: #0b0b0b;
+    --ink2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11,11,11,0.10);
+    --series: #2a78d6;
+    --good: #0ca30c;
+    --warn: #fab219;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface: #1a1a19;
+      --plane: #0d0d0d;
+      --ink: #ffffff;
+      --ink2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255,255,255,0.10);
+      --series: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --plane: #0d0d0d;
+    --ink: #ffffff;
+    --ink2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --border: rgba(255,255,255,0.10);
+    --series: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--plane);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: var(--ink2); font-size: 13px; margin: 0 0 24px; }
+  .banner {
+    background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warn);
+    border-radius: 8px; padding: 12px 16px; font-size: 13px; color: var(--ink2); margin-bottom: 24px;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  thead th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+    color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--grid);
+    cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; background: var(--surface);
+  }
+  thead th:hover { color: var(--ink); }
+  thead th.sorted::after { content: " \25BE"; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--grid); font-size: 13px; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--plane); }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  td.mono { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .muted { color: var(--muted); }
+  .small { font-size: 11px; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  }
+  .badge-good { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .badge-muted { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--muted); }
+  .scorewrap { position: relative; width: 90px; height: 16px; background: var(--grid); border-radius: 999px; overflow: hidden; }
+  .scorebar { position: absolute; inset: 0 auto 0 0; background: var(--series); border-radius: 999px; }
+  .scoretext {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 6px; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+  footer a { color: var(--ink2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Undervalued Stock Scanner</h1>
+  <p class="subtitle">Generated 2026-08-15 19:16 &middot; universe: demo sample &middot; 16 tickers scanned</p>
+
+  <div class="banner">DEMO DATA &mdash; these 16 rows are hand-verified sample tickers used to sanity-check the scoring logic offline. Run <code>python scanner.py --universe both -o results.html</code> with real internet access to replace this with a live S&amp;P 500 + Nasdaq Composite scan.</div>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Tickers scanned</div><div class="value">16</div></div>
+    <div class="tile"><div class="label">Shown below</div><div class="value">16</div></div>
+    <div class="tile"><div class="label">Low-volume flagged</div><div class="value">3</div></div>
+    <div class="tile"><div class="label">10&ndash;20% pullback flagged</div><div class="value">8</div></div>
+    <div class="tile"><div class="label">Median composite score</div><div class="value">43</div></div>
+  </div>
+
+  <table id="results">
+    <thead>
+      <tr>
+        <th data-type="text">Ticker</th>
+        <th data-type="text">Company / Sector</th>
+        <th data-type="num">Mkt Cap</th>
+        <th data-type="num">Price</th>
+        <th data-type="num">Trail P/E</th>
+        <th data-type="num">Fwd P/E</th>
+        <th data-type="num">PEG</th>
+        <th data-type="num">Debt/Eq</th>
+        <th data-type="num">ROE</th>
+        <th data-type="num">Off High</th>
+        <th data-type="text">Pullback 10&ndash;20%</th>
+        <th data-type="num">Vol Ratio</th>
+        <th data-type="text">Low Volume</th>
+        <th data-type="text">High Short Int</th>
+        <th data-type="num" class="sorted">Score</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+<tr>
+  <td class="mono">MU</td>
+  <td>Micron Technology<div class="muted small">Technology</div></td>
+  <td class="num">$1.10T</td>
+  <td class="num">$971.66</td>
+  <td class="num">21.9x</td>
+  <td class="num">6.8x</td>
+  <td class="num">0.0x</td>
+  <td class="num">0.1x</td>
+  <td class="num">67%</td>
+  <td class="num">16%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.83</td>
+  <td><span class="badge badge-good">quiet</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="76.7 / 100"><div class="scorebar" style="width:76.7%"></div><span class="scoretext">77</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">EG</td>
+  <td>Everest Group Ltd<div class="muted small">Financial Services</div></td>
+  <td class="num">$14.1B</td>
+  <td class="num">$370.11</td>
+  <td class="num">7.9x</td>
+  <td class="num">6.8x</td>
+  <td class="num">0.7x</td>
+  <td class="num">0.2x</td>
+  <td class="num">13%</td>
+  <td class="num">10%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.86</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="73.3 / 100"><div class="scorebar" style="width:73.3%"></div><span class="scoretext">73</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">LYFT</td>
+  <td>Lyft Inc<div class="muted small">Technology</div></td>
+  <td class="num">$5.2B</td>
+  <td class="num">$13.70</td>
+  <td class="num">2.4x</td>
+  <td class="num">9.3x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">0.4x</td>
+  <td class="num">153%</td>
+  <td class="num">35%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.79</td>
+  <td><span class="badge badge-good">quiet</span></td>
+  <td><span class="badge badge-good">caution</span></td>
+  <td><div class="scorewrap" title="73.1 / 100"><div class="scorebar" style="width:73.1%"></div><span class="scoretext">73</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">CHTR</td>
+  <td>Charter Communications<div class="muted small">Communication Services</div></td>
+  <td class="num">$20.6B</td>
+  <td class="num">$154.27</td>
+  <td class="num">4.0x</td>
+  <td class="num">3.6x</td>
+  <td class="num">0.3x</td>
+  <td class="num">4.4x</td>
+  <td class="num">27%</td>
+  <td class="num">43%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.87</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-good">caution</span></td>
+  <td><div class="scorewrap" title="71.4 / 100"><div class="scorebar" style="width:71.4%"></div><span class="scoretext">71</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">UHS</td>
+  <td>Universal Health Services<div class="muted small">Healthcare</div></td>
+  <td class="num">$8.8B</td>
+  <td class="num">$170.02</td>
+  <td class="num">6.9x</td>
+  <td class="num">7.3x</td>
+  <td class="num">0.9x</td>
+  <td class="num">0.7x</td>
+  <td class="num">21%</td>
+  <td class="num">19%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.97</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="66.7 / 100"><div class="scorebar" style="width:66.7%"></div><span class="scoretext">67</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">DVN</td>
+  <td>Devon Energy Corporation<div class="muted small">Energy</div></td>
+  <td class="num">$49.3B</td>
+  <td class="num">$42.74</td>
+  <td class="num">9.8x</td>
+  <td class="num">8.8x</td>
+  <td class="num">1.0x</td>
+  <td class="num">0.3x</td>
+  <td class="num">12%</td>
+  <td class="num">16%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.69</td>
+  <td><span class="badge badge-good">quiet</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="53.3 / 100"><div class="scorebar" style="width:53.3%"></div><span class="scoretext">53</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">APA</td>
+  <td>APA Corporation<div class="muted small">Energy</div></td>
+  <td class="num">$12.8B</td>
+  <td class="num">$36.15</td>
+  <td class="num">8.6x</td>
+  <td class="num">9.6x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">0.5x</td>
+  <td class="num">27%</td>
+  <td class="num">18%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.94</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="46.4 / 100"><div class="scorebar" style="width:46.4%"></div><span class="scoretext">46</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">CNC</td>
+  <td>Centene Corporation<div class="muted small">Healthcare</div></td>
+  <td class="num">$32.9B</td>
+  <td class="num">$66.54</td>
+  <td class="num">&mdash;</td>
+  <td class="num">14.4x</td>
+  <td class="num">0.4x</td>
+  <td class="num">0.7x</td>
+  <td class="num">-20%</td>
+  <td class="num">15%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.86</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="43.8 / 100"><div class="scorebar" style="width:43.8%"></div><span class="scoretext">44</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">HCA</td>
+  <td>HCA Healthcare<div class="muted small">Healthcare</div></td>
+  <td class="num">$90.2B</td>
+  <td class="num">$406.59</td>
+  <td class="num">13.6x</td>
+  <td class="num">13.2x</td>
+  <td class="num">1.4x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">&mdash;</td>
+  <td class="num">14%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.93</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="42.3 / 100"><div class="scorebar" style="width:42.3%"></div><span class="scoretext">42</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">CMCSA</td>
+  <td>Comcast Corporation<div class="muted small">Communication Services</div></td>
+  <td class="num">$92.9B</td>
+  <td class="num">$26.18</td>
+  <td class="num">8.5x</td>
+  <td class="num">7.5x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">1.0x</td>
+  <td class="num">11%</td>
+  <td class="num">22%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.86</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="39.3 / 100"><div class="scorebar" style="width:39.3%"></div><span class="scoretext">39</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">VICI</td>
+  <td>VICI Properties Inc<div class="muted small">Real Estate</div></td>
+  <td class="num">$29.1B</td>
+  <td class="num">$26.40</td>
+  <td class="num">10.2x</td>
+  <td class="num">9.0x</td>
+  <td class="num">3.8x</td>
+  <td class="num">0.6x</td>
+  <td class="num">10%</td>
+  <td class="num">20%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">1.03</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="36.7 / 100"><div class="scorebar" style="width:36.7%"></div><span class="scoretext">37</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">GPN</td>
+  <td>Global Payments Inc<div class="muted small">Financial Services</div></td>
+  <td class="num">$22.7B</td>
+  <td class="num">$85.86</td>
+  <td class="num">48.1x</td>
+  <td class="num">6.3x</td>
+  <td class="num">0.3x</td>
+  <td class="num">1.0x</td>
+  <td class="num">2%</td>
+  <td class="num">18%</td>
+  <td><span class="badge badge-good">in band</span></td>
+  <td class="num">0.88</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="35.7 / 100"><div class="scorebar" style="width:35.7%"></div><span class="scoretext">36</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">VST</td>
+  <td>Vistra Corp<div class="muted small">Utilities</div></td>
+  <td class="num">$49.7B</td>
+  <td class="num">$148.13</td>
+  <td class="num">25.0x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">&mdash;</td>
+  <td class="num">&mdash;</td>
+  <td class="num">&mdash;</td>
+  <td class="num">27%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">&mdash;</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="30.0 / 100"><div class="scorebar" style="width:30.0%"></div><span class="scoretext">30</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">LEN</td>
+  <td>Lennar Corporation<div class="muted small">Consumer Discretionary</div></td>
+  <td class="num">$20.9B</td>
+  <td class="num">$86.83</td>
+  <td class="num">13.5x</td>
+  <td class="num">15.4x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">0.3x</td>
+  <td class="num">7%</td>
+  <td class="num">33%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.88</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="17.9 / 100"><div class="scorebar" style="width:17.9%"></div><span class="scoretext">18</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">PFE</td>
+  <td>Pfizer Inc<div class="muted small">Healthcare</div></td>
+  <td class="num">$152.7B</td>
+  <td class="num">$26.79</td>
+  <td class="num">35.2x</td>
+  <td class="num">9.7x</td>
+  <td class="num">&mdash;</td>
+  <td class="num">0.7x</td>
+  <td class="num">5%</td>
+  <td class="num">9%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.92</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="14.3 / 100"><div class="scorebar" style="width:14.3%"></div><span class="scoretext">14</span></div></td>
+</tr>
+
+
+<tr>
+  <td class="mono">ZBRA</td>
+  <td>Zebra Technologies<div class="muted small">Technology</div></td>
+  <td class="num">$13.7B</td>
+  <td class="num">$288.57</td>
+  <td class="num">34.8x</td>
+  <td class="num">18.0x</td>
+  <td class="num">1.2x</td>
+  <td class="num">0.9x</td>
+  <td class="num">15%</td>
+  <td class="num">31%</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td class="num">0.92</td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><span class="badge badge-muted">&mdash;</span></td>
+  <td><div class="scorewrap" title="10.7 / 100"><div class="scorebar" style="width:10.7%"></div><span class="scoretext">11</span></div></td>
+</tr>
+
+    </tbody>
+  </table>
+
+  <footer>
+    Composite score weights your 4 criteria (P/E, historical cheapness, low recent volume, 10&ndash;20% pullback) at 2x,
+    and 6 secondary factors (PEG, P/E trend, FCF yield, debt/equity, ROE, P/E vs. sector) at 1x.
+    Insider activity and "why is it cheap" are flagged for manual review, not scored &mdash; see the repo README.
+    Not investment advice.
+  </footer>
+</div>
+<script>
+(function() {
+  const table = document.getElementById('results');
+  const tbody = table.tBodies[0];
+  const headers = table.tHead.rows[0].cells;
+  let sortState = { col: 14, dir: -1 };
+
+  function cellValue(row, idx, type) {
+    const cell = row.cells[idx];
+    if (type === 'num') {
+      const t = cell.getAttribute('data-sort') ?? cell.textContent;
+      const n = parseFloat(String(t).replace(/[^0-9.\-]/g, ''));
+      return isNaN(n) ? -Infinity : n;
+    }
+    return cell.textContent.trim().toLowerCase();
+  }
+
+  function sortBy(idx) {
+    const type = headers[idx].getAttribute('data-type');
+    const dir = (sortState.col === idx) ? -sortState.dir : -1;
+    sortState = { col: idx, dir };
+    const rows = Array.from(tbody.rows);
+    rows.sort((a, b) => {
+      const av = cellValue(a, idx, type), bv = cellValue(b, idx, type);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    Array.from(headers).forEach(h => h.classList.remove('sorted'));
+    headers[idx].classList.add('sorted');
+  }
+
+  Array.from(headers).forEach((h, idx) => h.addEventListener('click', () => sortBy(idx)));
+})();
+</script>
+</body>
+</html>

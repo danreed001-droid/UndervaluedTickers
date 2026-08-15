@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+scan_checkpoint.csv
+scan_failures.log
+undervalued_scan_results.xlsx
+*.egg-info/
+.venv/
+venv/
