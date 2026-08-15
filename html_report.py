@@ -80,6 +80,22 @@ def _badge(is_true, true_label, false_label="&mdash;", variant="good") -> str:
     return f'<span class="badge badge-muted">{false_label}</span>'
 
 
+def _sector_chips_html(df: pd.DataFrame) -> str:
+    """Clickable sector filter chips above the table. Built from whatever
+    sectors are actually present in this run's data (not a hardcoded GICS
+    list) so a chip never points at zero rows. 'All' clears the filter."""
+    if "sector" not in df.columns:
+        return ""
+    sectors = sorted(s for s in df["sector"].dropna().unique().tolist() if str(s).strip())
+    if not sectors:
+        return ""
+    chips = ['<button type="button" class="chip chip-all active" data-sector="">All sectors</button>']
+    for s in sectors:
+        s_esc = html.escape(str(s))
+        chips.append(f'<button type="button" class="chip" data-sector="{s_esc}">{s_esc}</button>')
+    return "\n    ".join(chips)
+
+
 def _score_tier(score: float) -> str:
     """Composite score -> CSS modifier class. Three tiers, status-colored."""
     if score >= 75:
@@ -175,10 +191,12 @@ def _sparkline_svg(prices: list[float], width: int = 96, height: int = 26) -> st
 
 
 ROW_TEMPLATE = """
-<tr>
+<tr data-sector="{sector_attr}">
+  <td class="mono col-rank">{rank}</td>
   <td class="mono">{ticker}</td>
   <td>{company}<div class="muted small">{sector}</div></td>
   <td>{sparkline}</td>
+  <td>{score_bar}</td>
   <td class="blurb">{blurb}</td>
   <td class="num">{market_cap}</td>
   <td class="num">{price}</td>
@@ -192,7 +210,6 @@ ROW_TEMPLATE = """
   <td class="num">{vol_ratio}</td>
   <td>{volume_badge}</td>
   <td>{short_badge}</td>
-  <td>{score_bar}</td>
 </tr>
 """
 
@@ -274,7 +291,27 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .tile.tile-good {{ --tile-accent: var(--good); }}
   .tile .label {{ font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }}
   .tile .value {{ font-size: 26px; font-weight: 600; margin-top: 4px; }}
-  table {{ width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }}
+
+  .filterbar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }}
+  .chip {{
+    font: inherit; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink2);
+    cursor: pointer; white-space: nowrap;
+  }}
+  .chip:hover {{ background: var(--plane); }}
+  .chip.active {{ background: var(--series); border-color: var(--series); color: #fff; }}
+  .filter-count {{ font-size: 12px; color: var(--muted); margin-left: auto; white-space: nowrap; }}
+
+  /* One bounded, both-axis scroll panel for the table -- the tiles, filter
+     bar and headline stay in normal page flow above it. This is required
+     (not just nicer) for the sticky header + sticky rank column below:
+     position: sticky needs a real scrolling ancestor, and it has to be the
+     SAME ancestor for both the thead (top: 0) and .col-rank (left: 0). An
+     unbounded-height wrapper with only overflow-x set doesn't work for the
+     vertical stick (there'd be nothing to scroll internally); a bounded
+     max-height with overflow: auto on both axes gives both their anchor. */
+  .table-scroll {{ max-height: 74vh; overflow: auto; border-radius: 10px; border: 1px solid var(--border); }}
+  table {{ width: 100%; border-collapse: collapse; background: var(--surface); }}
   thead th {{
     text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
     color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--grid);
@@ -287,8 +324,18 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   tbody td {{ padding: 9px 12px; border-bottom: 1px solid var(--grid); font-size: 13px; vertical-align: middle; }}
   tbody tr:last-child td {{ border-bottom: none; }}
   tbody tr:hover {{ background: var(--plane); }}
+  tbody tr:hover td.col-rank {{ background: var(--plane); }}
   td.num {{ font-variant-numeric: tabular-nums; text-align: right; }}
   td.mono {{ font-variant-numeric: tabular-nums; font-weight: 600; }}
+  /* Rank ("#") stays pinned to the left edge -- on a small screen this
+     table is both long (scroll down) and wide (scroll sideways), and this
+     is the one column that answers "which row am I even looking at" in
+     either direction. */
+  .col-rank {{
+    position: sticky; left: 0; z-index: 1; background: var(--surface);
+    text-align: center; color: var(--muted); width: 1%;
+  }}
+  thead th.col-rank {{ z-index: 3; }}
   td.blurb {{ font-size: 12px; color: var(--ink2); max-width: 260px; min-width: 200px; white-space: normal; line-height: 1.4; }}
   .muted {{ color: var(--muted); }}
   .small {{ font-size: 11px; }}
@@ -333,12 +380,20 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     <div class="tile tile-blue"><div class="label">Median composite score</div><div class="value">{median_score}</div></div>
   </div>
 
+  <div class="filterbar" id="sector-filter">
+    {sector_chips}
+    <span class="filter-count" id="filter-count">Showing {n_shown} of {n_shown}</span>
+  </div>
+
+  <div class="table-scroll">
   <table id="results">
     <thead>
       <tr>
+        <th data-type="skip" class="nosort col-rank">#</th>
         <th data-type="text">Ticker</th>
         <th data-type="text">Company / Sector</th>
         <th data-type="skip" class="nosort">Trend (120d)</th>
+        <th data-type="num" class="sorted">Score</th>
         <th data-type="text">Why It Scored This Way</th>
         <th data-type="num">Mkt Cap</th>
         <th data-type="num">Price</th>
@@ -352,13 +407,13 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
         <th data-type="num">Vol Ratio</th>
         <th data-type="text">Low Volume</th>
         <th data-type="text">High Short Int</th>
-        <th data-type="num" class="sorted">Score</th>
       </tr>
     </thead>
     <tbody>
       {rows}
     </tbody>
   </table>
+  </div>
 
   <footer>
     Composite score weights your 4 criteria (P/E, historical cheapness, low recent volume, 10&ndash;20% pullback) at 2x,
@@ -373,7 +428,21 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   const table = document.getElementById('results');
   const tbody = table.tBodies[0];
   const headers = table.tHead.rows[0].cells;
-  let sortState = {{ col: 16, dir: -1 }};
+  let sortState = {{ col: 4, dir: -1 }};
+
+  // The "#" column is a running position among whatever rows are currently
+  // visible, in whatever order is currently on screen -- not a fixed
+  // composite-score rank. Recomputed after every sort AND every filter
+  // change so it never goes stale or counts hidden rows.
+  function renumberVisibleRanks() {{
+    let n = 0;
+    Array.from(tbody.rows).forEach(r => {{
+      if (r.style.display === 'none') return;
+      n++;
+      const rankCell = r.cells[0];
+      if (rankCell) rankCell.textContent = n;
+    }});
+  }}
 
   function cellValue(row, idx, type) {{
     const cell = row.cells[idx];
@@ -398,11 +467,52 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
       return 0;
     }});
     rows.forEach(r => tbody.appendChild(r));
+    renumberVisibleRanks();
     Array.from(headers).forEach(h => h.classList.remove('sorted'));
     headers[idx].classList.add('sorted');
   }}
 
   Array.from(headers).forEach((h, idx) => h.addEventListener('click', () => sortBy(idx)));
+
+  // Sector filter chips -- click one to show only that sector, click it
+  // again (or click "All sectors") to clear back to everything. Built
+  // dynamically server-side from whatever sectors are actually in this
+  // report, so there's no chip that ever points at zero rows.
+  const filterbar = document.getElementById('sector-filter');
+  if (filterbar) {{
+    const chips = Array.from(filterbar.querySelectorAll('.chip'));
+    const allChip = filterbar.querySelector('.chip-all');
+    const countEl = document.getElementById('filter-count');
+    const rows = Array.from(tbody.rows);
+    const total = rows.length;
+
+    function applyFilter(sector) {{
+      rows.forEach(r => {{
+        const match = !sector || r.getAttribute('data-sector') === sector;
+        r.style.display = match ? '' : 'none';
+      }});
+      renumberVisibleRanks();
+      if (countEl) {{
+        const shown = rows.filter(r => r.style.display !== 'none').length;
+        countEl.textContent = sector ? `Showing ${{shown}} of ${{total}} — ${{sector}}` : `Showing ${{total}} of ${{total}}`;
+      }}
+    }}
+
+    chips.forEach(chip => {{
+      chip.addEventListener('click', () => {{
+        const sector = chip.getAttribute('data-sector');
+        const alreadyActive = chip.classList.contains('active');
+        chips.forEach(c => c.classList.remove('active'));
+        if (!sector || alreadyActive) {{
+          if (allChip) allChip.classList.add('active');
+          applyFilter('');
+        }} else {{
+          chip.classList.add('active');
+          applyFilter(sector);
+        }}
+      }});
+    }});
+  }}
 }})();
 </script>
 </body>
@@ -413,12 +523,15 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_total_universe: int | None = None,
                        universe_note: str | None = None) -> str:
     rows_html = []
-    for _, r in df.iterrows():
+    for i, (_, r) in enumerate(df.iterrows(), start=1):
+        sector_val = html.escape(str(r.get("sector") or ""))
         rows_html.append(
             ROW_TEMPLATE.format(
+                rank=i,
+                sector_attr=sector_val,
                 ticker=html.escape(str(r.get("ticker", ""))),
                 company=html.escape(str(r.get("company") or "")),
-                sector=html.escape(str(r.get("sector") or "")),
+                sector=sector_val,
                 sparkline=_sparkline_svg(_parse_sparkline(r.get("sparkline_prices"))),
                 blurb=html.escape(str(r.get("score_blurb") or "")),
                 market_cap=_fmt(r.get("market_cap"), "usd_b"),
@@ -474,6 +587,7 @@ def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_to
         n_pullback=n_pullback,
         median_score=f"{median_score:.0f}" if not math.isnan(median_score) else "&mdash;",
         banner=banner,
+        sector_chips=_sector_chips_html(df),
         rows="\n".join(rows_html),
     )
 
