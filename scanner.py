@@ -1,57 +1,21 @@
 #!/usr/bin/env python3
 """
-undervalued_scanner.py
-=======================
+scanner.py
+===========
 
 A P/E + historical-valuation + volume + pullback screener for the S&P 500
 and Nasdaq Composite, with a transparent, self-relative composite score.
 
-WHY THIS EXISTS
-----------------
-Built from a conversation where the ask was: scan the S&P 500 + Nasdaq
-Composite for undervalued stocks using (1) P/E ratio, (2) how cheap the
-stock is relative to its own history, (3) stocks whose recent 10-20 trading
-day volume is running below normal, and (4, added later) stocks trading
-10-20% below their 52-week high. Those four are the USER'S criteria and are
-weighted 2x. On top of that, 6 more factors (drawn from a "10 things to
-consider" list) are scored at 1x weight: PEG ratio, trailing-vs-forward P/E
-trend, free-cash-flow yield, debt/equity, ROE, P/E vs. sector peers, and
-dividend payout sustainability. Two of the original 10 points -- insider
-buying/selling and "why is the market pricing this low" -- are NOT scored
-here because there's no reliable free bulk data source for them; they're
-flagged as "review manually" for whatever makes your shortlist.
-
-DATA SOURCE
------------
-Uses `yfinance` (free, unofficial Yahoo Finance wrapper). This needs real
-internet access -- it will NOT work in a network-sandboxed environment.
-Run it on your own machine.
-
-    pip install yfinance pandas requests lxml openpyxl tqdm
-
-Scanning the full S&P 500 + Nasdaq Composite (~500 + ~3,000-4,000 tickers)
-means several thousand network calls. Expect this to take a while (easily
-30-90+ minutes depending on --workers and Yahoo's mood) and to occasionally
-get rate-limited -- the script checkpoints to CSV as it goes, so you can
-kill it and re-run with --resume to pick up where you left off.
-
 USAGE
 -----
     # Quick smoke test with fabricated data, no network needed:
-    python undervalued_scanner.py --demo
+    python scanner.py --demo
 
-    # Real run, S&P 500 only, 20 worker threads, save to my_scan.xlsx:
-    python undervalued_scanner.py --universe sp500 --workers 20 -o my_scan.xlsx
+    # Real run, S&P 500 only, 16 worker threads, save to docs/index.html:
+    python scanner.py --universe sp500 --workers 16 --top 150 -o docs/index.html
 
     # Full universe (S&P 500 + Nasdaq Composite), resume a prior run:
-    python undervalued_scanner.py --universe both --resume -o full_scan.xlsx
-
-    # Just test the plumbing on 25 random tickers before committing to a
-    # multi-thousand-ticker run:
-    python undervalued_scanner.py --universe both --limit 25
-
-See --help for every knob (thresholds, recent-volume window, drawdown
-band, weights, etc).
+    python scanner.py --universe both --resume -o full_scan.html
 """
 
 from __future__ import annotations
@@ -111,8 +75,14 @@ SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 # Universe builders
 # ---------------------------------------------------------------------------
 def get_sp500_tickers() -> list[str]:
-    """Scrape the current S&P 500 constituent list from Wikipedia."""
-    tables = pd.read_html(SP500_WIKI_URL)
+    """Scrape the current S&P 500 constituent list from Wikipedia with a valid User-Agent."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    resp = requests.get(SP500_WIKI_URL, headers=headers, timeout=30)
+    resp.raise_for_status()
+    
+    tables = pd.read_html(resp.text)
     df = tables[0]
     tickers = df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False)
     return sorted(tickers.unique().tolist())
@@ -122,13 +92,11 @@ def get_nasdaq_composite_tickers() -> list[str]:
     """
     Approximate the Nasdaq Composite with nasdaqtrader.com's listed-securities
     file, filtered to common/ordinary shares (drops ETFs and test issues).
-
-    Caveat: the *real* Nasdaq Composite also includes some non-U.S.-listed
-    ADRs and other edge cases this file doesn't capture perfectly. This is
-    the standard practical proxy used by most open-source screeners, not an
-    official index feed.
     """
-    resp = requests.get(NASDAQ_LISTED_URL, timeout=30)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    resp = requests.get(NASDAQ_LISTED_URL, headers=headers, timeout=30)
     resp.raise_for_status()
     # pipe-delimited, last line is a footer ("File Creation Time...")
     lines = [l for l in resp.text.splitlines() if l and not l.startswith("File Creation")]
@@ -164,7 +132,7 @@ class FetchResult:
 
 def fetch_one(ticker: str, retries: int = 3, backoff: float = 1.5) -> FetchResult:
     """Pull fundamentals + price history for one ticker via yfinance."""
-    import yfinance as yf  # imported lazily so --demo needs no network lib import failures
+    import yfinance as yf
 
     last_err = None
     for attempt in range(retries):
@@ -172,11 +140,8 @@ def fetch_one(ticker: str, retries: int = 3, backoff: float = 1.5) -> FetchResul
             t = yf.Ticker(ticker)
             info = t.info or {}
             hist = t.history(period="5y", interval="1d", auto_adjust=False)
-            if hist is None or hist.empty or "trailingPE" not in info and info.get("trailingPE") is None:
-                # still proceed -- some fields legitimately absent, that's fine
-                pass
             return FetchResult(ticker, True, data=_extract_metrics(ticker, info, hist))
-        except Exception as exc:  # yfinance raises all sorts of things
+        except Exception as exc:
             last_err = str(exc)
             time.sleep(backoff ** attempt + random.random())
     return FetchResult(ticker, False, error=last_err)
@@ -189,7 +154,7 @@ def _extract_metrics(ticker: str, info: dict, hist: pd.DataFrame) -> dict:
     current_price = float(close.iloc[-1]) if len(close) else info.get("currentPrice")
     fifty2wk_high = float(close.tail(252).max()) if len(close) >= 5 else info.get("fiftyTwoWeekHigh")
     drawdown = None
-    if current_price and fifty2wk_high:
+    if current_price and fifty2wk_high and fifty2wk_high > 0:
         drawdown = (fifty2wk_high - current_price) / fifty2wk_high
 
     recent_vol = float(vol.tail(RECENT_VOL_DAYS).mean()) if len(vol) >= RECENT_VOL_DAYS else None
@@ -211,7 +176,7 @@ def _extract_metrics(ticker: str, info: dict, hist: pd.DataFrame) -> dict:
 
     debt_to_equity = info.get("debtToEquity")
     if debt_to_equity is not None:
-        debt_to_equity = debt_to_equity / 100.0  # yfinance reports this as a percent-like number
+        debt_to_equity = debt_to_equity / 100.0
 
     return dict(
         ticker=ticker,
@@ -283,7 +248,7 @@ def fetch_universe(
 
 
 # ---------------------------------------------------------------------------
-# Scoring -- vectorized, self-relative to the scanned universe
+# Scoring
 # ---------------------------------------------------------------------------
 def _lower_is_better(series: pd.Series, good_q=0.25, ok_q=0.5) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce")
@@ -311,14 +276,11 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # sector/market medians for the P/E-vs-sector comparison
     if "sector" in df.columns:
         df["sector_median_pe"] = df.groupby("sector")["trailing_pe"].transform("median")
     else:
         df["sector_median_pe"] = df["trailing_pe"].median()
     df["pe_vs_sector_ratio"] = df["trailing_pe"] / df["sector_median_pe"]
-
-    # current P/E vs. the stock's own ~5yr historical median P/E
     df["pe_vs_history_ratio"] = df["trailing_pe"] / df["historical_median_pe"]
 
     scores = pd.DataFrame(index=df.index)
@@ -326,8 +288,6 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
     scores["historical_cheap"] = _lower_is_better(df["pe_vs_history_ratio"])
     scores["low_volume"] = _lower_is_better(df["volume_ratio"])
 
-    # pullback band is not a simple lower/higher-is-better -- score by distance
-    # from the center of the 10-20% band
     def pullback_score(dd):
         if pd.isna(dd):
             return np.nan
@@ -338,7 +298,7 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
         return 0.0
     scores["pullback_10_20"] = df["drawdown_from_high"].apply(pullback_score)
 
-    scores["peg"] = _lower_is_better(df["peg"], good_q=0.33, ok_q=0.66)  # PEG has a natural "<1 good" feel
+    scores["peg"] = _lower_is_better(df["peg"], good_q=0.33, ok_q=0.66)
     scores["pe_trend"] = np.where(
         df["forward_pe"].notna() & df["trailing_pe"].notna(),
         (df["forward_pe"] < df["trailing_pe"]).astype(float),
@@ -370,9 +330,85 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Demo mode -- exercises the scoring pipeline with real numbers pulled by
-# hand earlier for 16 tickers, so the logic can be sanity-checked with zero
-# network access.
+# HTML Report Exporter (Built-in)
+# ---------------------------------------------------------------------------
+def write_html_report(df: pd.DataFrame, out_path: str, universe_label: str, is_demo: bool, n_total_universe: int | None):
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Undervalued Tickers Scan Results</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; background: #f8f9fa; color: #333; }}
+        h1 {{ margin-bottom: 5px; }}
+        .subtitle {{ color: #666; margin-bottom: 20px; }}
+        table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }}
+        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #dee2e6; font-size: 14px; }}
+        th {{ background: #343a40; color: #fff; position: sticky; top: 0; }}
+        tr:hover {{ background: #f1f3f5; }}
+        .badge {{ padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
+        .badge-yes {{ background: #d4edda; color: #155724; }}
+        .badge-no {{ background: #f8d7da; color: #721c24; }}
+    </style>
+</head>
+<body>
+    <h1>Undervalued Tickers Screener</h1>
+    <div class="subtitle">Universe: <b>{universe_label}</b> | Total Scanned: {n_total_universe if n_total_universe else len(df)}</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Company</th>
+                <th>Sector</th>
+                <th>Price</th>
+                <th>P/E</th>
+                <th>Fwd P/E</th>
+                <th>Drawdown</th>
+                <th>Vol Ratio</th>
+                <th>Score</th>
+                <th>Manual Review</th>
+            </tr>
+        </thead>
+        <tbody>
+"""
+    for _, row in df.iterrows():
+        ticker = row.get("ticker", "")
+        company = row.get("company", "") or ""
+        sector = row.get("sector", "") or ""
+        price = f"${row['price']:.2f}" if pd.notna(row.get("price")) else "N/A"
+        pe = f"{row['trailing_pe']:.1f}" if pd.notna(row.get("trailing_pe")) else "N/A"
+        fwd_pe = f"{row['forward_pe']:.1f}" if pd.notna(row.get("forward_pe")) else "N/A"
+        dd = f"{row['drawdown_from_high']*100:.1f}%" if pd.notna(row.get("drawdown_from_high")) else "N/A"
+        vol_r = f"{row['volume_ratio']:.2f}" if pd.notna(row.get("volume_ratio")) else "N/A"
+        score = f"{row['composite_score']:.1f}" if pd.notna(row.get("composite_score")) else "0.0"
+        review = row.get("needs_manual_review", "")
+
+        html_content += f"""
+            <tr>
+                <td><b>{ticker}</b></td>
+                <td>{company}</td>
+                <td>{sector}</td>
+                <td>{price}</td>
+                <td>{pe}</td>
+                <td>{fwd_pe}</td>
+                <td>{dd}</td>
+                <td>{vol_r}</td>
+                <td><b>{score}</b></td>
+                <td>{review}</td>
+            </tr>
+"""
+
+    html_content += """
+        </tbody>
+    </table>
+</body>
+</html>
+"""
+    Path(out_path).write_text(html_content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Demo mode
 # ---------------------------------------------------------------------------
 def demo_dataframe() -> pd.DataFrame:
     rows = [
@@ -381,17 +417,6 @@ def demo_dataframe() -> pd.DataFrame:
         dict(ticker="APA", company="APA Corporation", sector="Energy", market_cap=12.778e9, price=36.15, trailing_pe=8.57, forward_pe=9.58, peg=None, pb=2.02, debt_equity=0.49, roe=0.2666, dividend_yield=0.0247, payout_ratio=0.2117, short_pct_float=0.0864, fcf_yield=0.11, fifty2wk_high=44.0, drawdown_from_high=0.178, recent_avg_volume=5506362, normal_avg_volume=5860269, volume_ratio=0.940, historical_median_pe=9.8),
         dict(ticker="CHTR", company="Charter Communications", sector="Communication Services", market_cap=20.63e9, price=154.27, trailing_pe=4.01, forward_pe=3.58, peg=0.27, pb=1.09, debt_equity=4.42, roe=0.2720, dividend_yield=None, payout_ratio=None, short_pct_float=0.2925, fcf_yield=0.14, fifty2wk_high=270.0, drawdown_from_high=0.429, recent_avg_volume=2998008, normal_avg_volume=3458122, volume_ratio=0.867, historical_median_pe=6.0),
         dict(ticker="DVN", company="Devon Energy Corporation", sector="Energy", market_cap=49.291e9, price=42.74, trailing_pe=9.83, forward_pe=8.85, peg=0.98, pb=1.26, debt_equity=0.28, roe=0.1152, dividend_yield=0.0279, payout_ratio=0.2744, short_pct_float=0.0265, fcf_yield=0.10, fifty2wk_high=51.0, drawdown_from_high=0.162, recent_avg_volume=9694035, normal_avg_volume=14099226, volume_ratio=0.688, historical_median_pe=10.9),
-        dict(ticker="ZBRA", company="Zebra Technologies", sector="Technology", market_cap=13.746e9, price=288.57, trailing_pe=34.78, forward_pe=18.01, peg=1.25, pb=5.19, debt_equity=0.86, roe=0.1529, dividend_yield=None, payout_ratio=None, short_pct_float=0.0571, fcf_yield=0.05, fifty2wk_high=420.0, drawdown_from_high=0.313, recent_avg_volume=890203, normal_avg_volume=963314, volume_ratio=0.924, historical_median_pe=24.0),
-        dict(ticker="UHS", company="Universal Health Services", sector="Healthcare", market_cap=8.767e9, price=170.02, trailing_pe=6.92, forward_pe=7.35, peg=0.93, pb=1.33, debt_equity=0.69, roe=0.2095, dividend_yield=0.0047, payout_ratio=0.0326, short_pct_float=0.0616, fcf_yield=0.12, fifty2wk_high=210.0, drawdown_from_high=0.190, recent_avg_volume=920330, normal_avg_volume=946074, volume_ratio=0.973, historical_median_pe=10.5),
-        dict(ticker="HCA", company="HCA Healthcare", sector="Healthcare", market_cap=90.198e9, price=406.59, trailing_pe=13.55, forward_pe=13.19, peg=1.35, pb=None, debt_equity=None, roe=None, dividend_yield=0.0077, payout_ratio=0.1044, short_pct_float=0.0420, fcf_yield=0.07, fifty2wk_high=470.0, drawdown_from_high=0.135, recent_avg_volume=1398494, normal_avg_volume=1497041, volume_ratio=0.934, historical_median_pe=15.8),
-        dict(ticker="GPN", company="Global Payments Inc", sector="Financial Services", market_cap=22.72e9, price=85.86, trailing_pe=48.06, forward_pe=6.32, peg=0.31, pb=1.07, debt_equity=0.98, roe=0.0243, dividend_yield=0.0108, payout_ratio=None, short_pct_float=0.0799, fcf_yield=0.02, fifty2wk_high=105.0, drawdown_from_high=0.182, recent_avg_volume=3280302, normal_avg_volume=3739922, volume_ratio=0.877, historical_median_pe=18.0),
-        dict(ticker="EG", company="Everest Group Ltd", sector="Financial Services", market_cap=14.113e9, price=370.11, trailing_pe=7.88, forward_pe=6.78, peg=0.71, pb=0.93, debt_equity=0.23, roe=0.1257, dividend_yield=0.0216, payout_ratio=0.1704, short_pct_float=0.0604, fcf_yield=0.09, fifty2wk_high=410.0, drawdown_from_high=0.097, recent_avg_volume=355714, normal_avg_volume=412246, volume_ratio=0.863, historical_median_pe=9.5),
-        dict(ticker="VICI", company="VICI Properties Inc", sector="Real Estate", market_cap=29.068e9, price=26.40, trailing_pe=10.23, forward_pe=9.02, peg=3.76, pb=0.99, debt_equity=0.60, roe=0.0985, dividend_yield=0.0683, payout_ratio=0.6987, short_pct_float=0.0229, fcf_yield=0.08, fifty2wk_high=33.0, drawdown_from_high=0.20, recent_avg_volume=9741006, normal_avg_volume=9413800, volume_ratio=1.035, historical_median_pe=11.8),
-        dict(ticker="LEN", company="Lennar Corporation", sector="Consumer Discretionary", market_cap=20.917e9, price=86.83, trailing_pe=13.49, forward_pe=15.39, peg=None, pb=0.97, debt_equity=0.29, roe=0.0737, dividend_yield=0.0230, payout_ratio=0.3108, short_pct_float=0.0025, fcf_yield=0.06, fifty2wk_high=130.0, drawdown_from_high=0.332, recent_avg_volume=2282442, normal_avg_volume=2603408, volume_ratio=0.877, historical_median_pe=12.9),
-        dict(ticker="MU", company="Micron Technology", sector="Technology", market_cap=1097.0e9, price=971.66, trailing_pe=21.93, forward_pe=6.76, peg=0.04, pb=10.89, debt_equity=0.06, roe=0.6664, dividend_yield=0.0006, payout_ratio=0.0120, short_pct_float=0.0266, fcf_yield=0.03, fifty2wk_high=1150.0, drawdown_from_high=0.155, recent_avg_volume=41625048, normal_avg_volume=50030500, volume_ratio=0.832, historical_median_pe=35.0),
-        dict(ticker="PFE", company="Pfizer Inc", sector="Healthcare", market_cap=152.694e9, price=26.79, trailing_pe=35.22, forward_pe=9.67, peg=None, pb=1.79, debt_equity=0.74, roe=0.0501, dividend_yield=0.0642, payout_ratio=2.2635, short_pct_float=0.0284, fcf_yield=0.06, fifty2wk_high=29.5, drawdown_from_high=0.092, recent_avg_volume=38629105, normal_avg_volume=42020269, volume_ratio=0.919, historical_median_pe=13.0),
-        dict(ticker="LYFT", company="Lyft Inc", sector="Technology", market_cap=5.202e9, price=13.70, trailing_pe=2.42, forward_pe=9.26, peg=None, pb=2.19, debt_equity=0.43, roe=1.5258, dividend_yield=None, payout_ratio=None, short_pct_float=0.2255, fcf_yield=0.15, fifty2wk_high=21.0, drawdown_from_high=0.348, recent_avg_volume=12709149, normal_avg_volume=16123118, volume_ratio=0.788, historical_median_pe=18.0),
-        dict(ticker="VST", company="Vistra Corp", sector="Utilities", market_cap=49.718e9, price=148.13, trailing_pe=24.98, forward_pe=None, peg=None, pb=None, debt_equity=None, roe=None, dividend_yield=None, payout_ratio=None, short_pct_float=None, fcf_yield=None, fifty2wk_high=203.0, drawdown_from_high=0.270, recent_avg_volume=None, normal_avg_volume=4641925, volume_ratio=None, historical_median_pe=None),
     ]
     return pd.DataFrame(rows)
 
@@ -402,26 +427,26 @@ def demo_dataframe() -> pd.DataFrame:
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--universe", choices=["sp500", "nasdaq", "both"], default="both",
-                   help="which index to scan (default: both)")
+                    help="which index to scan (default: both)")
     p.add_argument("--limit", type=int, default=None,
-                   help="only scan the first N tickers (random sample) -- useful for a quick test run")
+                    help="only scan the first N tickers (random sample) -- useful for a quick test run")
     p.add_argument("--workers", type=int, default=12, help="concurrent fetch threads (default: 12)")
     p.add_argument("--sleep", type=float, default=0.05,
-                   help="seconds to sleep between requests per worker, be polite to Yahoo (default: 0.05)")
+                    help="seconds to sleep between requests per worker, be polite to Yahoo (default: 0.05)")
     p.add_argument("--checkpoint", default="scan_checkpoint.csv", help="checkpoint CSV path")
     p.add_argument("--resume", action="store_true", help="resume from --checkpoint instead of refetching everything")
     p.add_argument("-o", "--output", default="results.html",
-                   help="output file -- extension picks the format: .html (sortable report), .xlsx, or .csv")
+                    help="output file -- extension picks the format: .html (sortable report), .xlsx, or .csv")
     p.add_argument("--top", type=int, default=100, help="how many top-scoring rows to keep in the output (default: 100)")
     p.add_argument("--demo", action="store_true", help="run the scorer on built-in sample data, no network needed")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
-                         format="%(asctime)s %(levelname)s %(message)s")
+                          format="%(asctime)s %(levelname)s %(message)s")
 
     if args.demo:
-        print("Running in --demo mode: scoring 16 pre-loaded sample tickers, no network calls made.\n")
+        print("Running in --demo mode: scoring sample tickers, no network calls made.\n")
         raw = demo_dataframe()
     else:
         tickers = build_universe(args.universe)
@@ -460,7 +485,6 @@ def main():
     if out_path.suffix.lower() == ".csv":
         top[display_cols].to_csv(out_path, index=False)
     elif out_path.suffix.lower() in (".html", ".htm"):
-        from html_report import write_html_report
         write_html_report(
             top, str(out_path),
             universe_label="demo sample" if args.demo else args.universe,
