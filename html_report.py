@@ -179,6 +179,7 @@ ROW_TEMPLATE = """
   <td class="mono">{ticker}</td>
   <td>{company}<div class="muted small">{sector}</div></td>
   <td>{sparkline}</td>
+  <td class="blurb">{blurb}</td>
   <td class="num">{market_cap}</td>
   <td class="num">{price}</td>
   <td class="num">{trailing_pe}</td>
@@ -259,6 +260,10 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warn);
     border-radius: 8px; padding: 12px 16px; font-size: 13px; color: var(--ink2); margin-bottom: 24px;
   }}
+  .banner-note {{
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+    color: var(--critical); font-weight: 600;
+  }}
   .tiles {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }}
   .tile {{
     background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--tile-accent, var(--grid));
@@ -284,6 +289,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   tbody tr:hover {{ background: var(--plane); }}
   td.num {{ font-variant-numeric: tabular-nums; text-align: right; }}
   td.mono {{ font-variant-numeric: tabular-nums; font-weight: 600; }}
+  td.blurb {{ font-size: 12px; color: var(--ink2); max-width: 260px; min-width: 200px; white-space: normal; line-height: 1.4; }}
   .muted {{ color: var(--muted); }}
   .small {{ font-size: 11px; }}
   .badge {{
@@ -333,6 +339,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
         <th data-type="text">Ticker</th>
         <th data-type="text">Company / Sector</th>
         <th data-type="skip" class="nosort">Trend (120d)</th>
+        <th data-type="text">Why It Scored This Way</th>
         <th data-type="num">Mkt Cap</th>
         <th data-type="num">Price</th>
         <th data-type="num">Trail P/E</th>
@@ -366,7 +373,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   const table = document.getElementById('results');
   const tbody = table.tBodies[0];
   const headers = table.tHead.rows[0].cells;
-  let sortState = {{ col: 15, dir: -1 }};
+  let sortState = {{ col: 16, dir: -1 }};
 
   function cellValue(row, idx, type) {{
     const cell = row.cells[idx];
@@ -403,7 +410,8 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_total_universe: int | None = None) -> str:
+def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_total_universe: int | None = None,
+                       universe_note: str | None = None) -> str:
     rows_html = []
     for _, r in df.iterrows():
         rows_html.append(
@@ -412,6 +420,7 @@ def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_to
                 company=html.escape(str(r.get("company") or "")),
                 sector=html.escape(str(r.get("sector") or "")),
                 sparkline=_sparkline_svg(_parse_sparkline(r.get("sparkline_prices"))),
+                blurb=html.escape(str(r.get("score_blurb") or "")),
                 market_cap=_fmt(r.get("market_cap"), "usd_b"),
                 price=_fmt(r.get("price"), "usd"),
                 trailing_pe=_fmt(r.get("trailing_pe"), "x"),
@@ -444,6 +453,10 @@ def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_to
         "Live scan output. Composite score is a screening aid, not a recommendation &mdash; "
         "see the README's \"10 things to consider\" before acting on anything here."
     )
+    if universe_note:
+        banner += (
+            f'<div class="banner-note">&#9888; {html.escape(universe_note)}</div>'
+        )
 
     return PAGE_TEMPLATE.format(
         series_light=SERIES_BLUE_LIGHT,
@@ -465,7 +478,8 @@ def build_html_report(df: pd.DataFrame, universe_label: str, is_demo: bool, n_to
     )
 
 
-def write_html_report(df: pd.DataFrame, path: str, universe_label: str, is_demo: bool, n_total_universe: int | None = None) -> None:
-    html_str = build_html_report(df, universe_label, is_demo, n_total_universe)
+def write_html_report(df: pd.DataFrame, path: str, universe_label: str, is_demo: bool, n_total_universe: int | None = None,
+                       universe_note: str | None = None) -> None:
+    html_str = build_html_report(df, universe_label, is_demo, n_total_universe, universe_note)
     with open(path, "w", encoding="utf-8") as f:
         f.write(html_str)
