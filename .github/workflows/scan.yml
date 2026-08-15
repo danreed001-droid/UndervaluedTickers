@@ -1,4 +1,4 @@
-name: Undervalued Stock Scan
+name: Yo Value Scan
 
 # Runs scanner.py on GitHub's servers and publishes results.html to
 # docs/index.html, so it can be served with GitHub Pages -- no Python on
@@ -9,7 +9,7 @@ name: Undervalued Stock Scan
 #   folder: /docs -> Save. Your report will then be live at
 #   https://<your-username>.github.io/<repo-name>/
 #
-# To run it right now: go to the "Actions" tab -> "Undervalued Stock Scan"
+# To run it right now: go to the "Actions" tab -> "Yo Value Scan"
 # -> "Run workflow".
 
 on:
