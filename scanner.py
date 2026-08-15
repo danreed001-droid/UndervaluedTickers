@@ -12,7 +12,7 @@ USAGE
     python scanner.py --demo
 
     # Real run, S&P 500 only, 16 worker threads, save to docs/index.html:
-    python scanner.py --universe sp500 --workers 16 --top 150 -o docs/index.html
+    python scanner.py --universe sp500 --workers 16 --top 40 -o docs/index.html
 
     # Full universe (S&P 500 + Nasdaq Composite), resume a prior run:
     python scanner.py --universe both --resume -o full_scan.html
@@ -82,7 +82,8 @@ def get_sp500_tickers() -> list[str]:
     resp = requests.get(SP500_WIKI_URL, headers=headers, timeout=30)
     resp.raise_for_status()
     
-    tables = pd.read_html(resp.text)
+    # Use StringIO to satisfy modern pandas HTML parsing rules
+    tables = pd.read_html(io.StringIO(resp.text))
     df = tables[0]
     tickers = df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False)
     return sorted(tickers.unique().tolist())
@@ -346,9 +347,6 @@ def write_html_report(df: pd.DataFrame, out_path: str, universe_label: str, is_d
         th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #dee2e6; font-size: 14px; }}
         th {{ background: #343a40; color: #fff; position: sticky; top: 0; }}
         tr:hover {{ background: #f1f3f5; }}
-        .badge {{ padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
-        .badge-yes {{ background: #d4edda; color: #155724; }}
-        .badge-no {{ background: #f8d7da; color: #721c24; }}
     </style>
 </head>
 <body>
