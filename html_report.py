@@ -270,9 +270,12 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     -webkit-font-smoothing: antialiased;
   }}
   .wrap {{ max-width: 1280px; margin: 0 auto; padding: 32px 20px 64px; }}
+  .headrow {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }}
   h1 {{ font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }}
   .accent {{ color: var(--series); }}
   .subtitle {{ color: var(--ink2); font-size: 13px; margin: 0 0 24px; }}
+  .theme-toggle {{ display: flex; gap: 6px; flex: none; }}
+  .theme-btn.active {{ background: var(--series); border-color: var(--series); color: #fff; }}
   .banner {{
     background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warn);
     border-radius: 8px; padding: 12px 16px; font-size: 13px; color: var(--ink2); margin-bottom: 24px;
@@ -366,9 +369,31 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<script>
+// Applied synchronously, before the rest of the page paints, so a saved
+// preference doesn't show a flash of the wrong theme. Falls back to the
+// prefers-color-scheme media query (already in the CSS above) when nothing
+// is saved yet -- this only ever *overrides* that default.
+(function() {{
+  try {{
+    var saved = localStorage.getItem('yo-value-scanner-theme');
+    if (saved === 'light' || saved === 'dark') {{
+      document.documentElement.setAttribute('data-theme', saved);
+    }}
+  }} catch (e) {{}}
+}})();
+</script>
 <div class="wrap">
-  <h1><span class="accent">&#9679;</span> Yo Value Scanner</h1>
-  <p class="subtitle">Generated {generated_at} &middot; universe: {universe} &middot; {n_scanned} tickers scanned</p>
+  <div class="headrow">
+    <div>
+      <h1><span class="accent">&#9679;</span> Yo Value Scanner</h1>
+      <p class="subtitle">Generated {generated_at} &middot; universe: {universe} &middot; {n_scanned} tickers scanned</p>
+    </div>
+    <div class="theme-toggle" role="group" aria-label="Color theme">
+      <button type="button" class="chip theme-btn" data-theme-choice="light">&#9728; Light</button>
+      <button type="button" class="chip theme-btn" data-theme-choice="dark">&#9789; Dark</button>
+    </div>
+  </div>
 
   <div class="banner">{banner}</div>
 
@@ -513,6 +538,36 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
       }});
     }});
   }}
+}})();
+
+(function() {{
+  // Light/Dark toggle. The early inline script in <head> already applied
+  // any saved preference to <html data-theme> before this ran; here we
+  // just reflect that into which button looks active, and wire up clicks.
+  const THEME_KEY = 'yo-value-scanner-theme';
+  const buttons = Array.from(document.querySelectorAll('.theme-btn'));
+  if (!buttons.length) return;
+
+  function currentTheme() {{
+    const explicit = document.documentElement.getAttribute('data-theme');
+    if (explicit === 'light' || explicit === 'dark') return explicit;
+    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }}
+
+  function markActive(theme) {{
+    buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-theme-choice') === theme));
+  }}
+
+  markActive(currentTheme());
+
+  buttons.forEach(btn => {{
+    btn.addEventListener('click', () => {{
+      const choice = btn.getAttribute('data-theme-choice');
+      document.documentElement.setAttribute('data-theme', choice);
+      try {{ localStorage.setItem(THEME_KEY, choice); }} catch (e) {{}}
+      markActive(choice);
+    }});
+  }});
 }})();
 </script>
 </body>
