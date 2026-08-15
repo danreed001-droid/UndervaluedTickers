@@ -19,7 +19,7 @@ on:
         description: "Which index to scan"
         type: choice
         options: [sp500, nasdaq, both]
-        default: sp500
+        default: both
       limit:
         description: "Only scan this many random tickers (blank = no limit). Start small to test."
         type: string
@@ -30,8 +30,12 @@ on:
         default: "150"
   schedule:
     # Weekdays 21:00 UTC (~5pm US Eastern, after the market close). Edit or
-    # remove this if you only want manual runs -- see note below about
-    # runtime/rate-limit risk for the "both" universe on a schedule.
+    # remove this if you only want manual runs. Scans "both" (S&P 500 +
+    # Nasdaq Composite, ~3,500+ tickers) by default -- that's several
+    # thousand yfinance calls and can take 30-90+ minutes; timeout-minutes
+    # below is set generously to cover it, and the scanner checkpoints per
+    # ticker so a run that gets rate-limited partway still produces a
+    # report from whatever it fetched.
     - cron: "0 21 * * 1-5"
 
 permissions:
@@ -59,7 +63,11 @@ jobs:
 
       - name: Run scanner
         env:
-          UNIVERSE: ${{ github.event.inputs.universe || 'sp500' }}
+          # Both the manual "Run workflow" default above and this fallback
+          # (used by the scheduled cron trigger, which has no inputs) scan
+          # everything by default now -- pick sp500/nasdaq from the Actions
+          # tab's "Run workflow" dropdown for a narrower/faster run.
+          UNIVERSE: ${{ github.event.inputs.universe || 'both' }}
           LIMIT: ${{ github.event.inputs.limit }}
           TOP: ${{ github.event.inputs.top || '150' }}
         run: |
