@@ -99,12 +99,11 @@ def get_nasdaq_composite_tickers() -> list[str]:
     }
     resp = requests.get(NASDAQ_LISTED_URL, headers=headers, timeout=30)
     resp.raise_for_status()
-    # pipe-delimited, last line is a footer ("File Creation Time...")
     lines = [l for l in resp.text.splitlines() if l and not l.startswith("File Creation")]
     df = pd.read_csv(io.StringIO("\n".join(lines)), sep="|")
     df = df[(df["Test Issue"] == "N") & (df["ETF"] == "N")]
     tickers = df["Symbol"].astype(str).str.strip()
-    tickers = tickers[~tickers.str.contains(r"[\.\$]", regex=True)]  # drop unit/warrant oddities
+    tickers = tickers[~tickers.str.contains(r"[\.\$]", regex=True)]
     return sorted(tickers.unique().tolist())
 
 
@@ -331,74 +330,176 @@ def score_universe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# HTML Report Exporter (Built-in)
+# HTML Report Exporter (Comprehensive Factor Breakdown Matrix)
 # ---------------------------------------------------------------------------
 def write_html_report(df: pd.DataFrame, out_path: str, universe_label: str, is_demo: bool, n_total_universe: int | None):
+    cols_to_show = [
+        "ticker", "company", "sector", "price", "composite_score",
+        "trailing_pe", "flag_pe_cheap",
+        "historical_median_pe", "pe_vs_history_ratio", "flag_historical_cheap",
+        "volume_ratio", "flag_low_volume",
+        "drawdown_from_high", "flag_pullback_10_20",
+        "peg", "flag_peg",
+        "forward_pe", "flag_pe_trend",
+        "fcf_yield", "flag_fcf_yield",
+        "debt_equity", "flag_debt_equity",
+        "roe", "flag_roe",
+        "pe_vs_sector_ratio", "flag_pe_vs_sector",
+        "payout_ratio", "flag_payout_sustainable",
+        "needs_manual_review"
+    ]
+    available_cols = [c for c in cols_to_show if c in df.columns]
+    report_df = df[available_cols].copy()
+
     html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Undervalued Tickers Scan Results</title>
+    <title>Undervalued Tickers Comprehensive Scan Results</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; background: #f8f9fa; color: #333; }}
-        h1 {{ margin-bottom: 5px; }}
-        .subtitle {{ color: #666; margin-bottom: 20px; }}
-        table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }}
-        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #dee2e6; font-size: 14px; }}
-        th {{ background: #343a40; color: #fff; position: sticky; top: 0; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 15px; background: #f8f9fa; color: #333; }}
+        h1 {{ margin-bottom: 5px; font-size: 22px; }}
+        .subtitle {{ color: #666; margin-bottom: 15px; font-size: 14px; }}
+        .table-container {{ max-width: 100%; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: #fff; margin-bottom: 20px; }}
+        table {{ border-collapse: collapse; width: 100%; white-space: nowrap; }}
+        th, td {{ padding: 8px 10px; text-align: left; border-bottom: 1px solid #dee2e6; border-right: 1px solid #eee; font-size: 12px; }}
+        th {{ background: #343a40; color: #fff; position: sticky; top: 0; z-index: 2; }}
         tr:hover {{ background: #f1f3f5; }}
+        .score-col {{ background: #e9ecef; font-weight: bold; }}
+        .flag-good {{ color: #155724; background: #d4edda; text-align: center; font-weight: bold; }}
+        .flag-mid {{ color: #856404; background: #fff3cd; text-align: center; }}
+        .flag-bad {{ color: #721c24; background: #f8d7da; text-align: center; }}
     </style>
 </head>
 <body>
-    <h1>Undervalued Tickers Screener</h1>
-    <div class="subtitle">Universe: <b>{universe_label}</b> | Total Scanned: {n_total_universe if n_total_universe else len(df)}</div>
-    <table>
-        <thead>
-            <tr>
-                <th>Ticker</th>
-                <th>Company</th>
-                <th>Sector</th>
-                <th>Price</th>
-                <th>P/E</th>
-                <th>Fwd P/E</th>
-                <th>Drawdown</th>
-                <th>Vol Ratio</th>
-                <th>Score</th>
-                <th>Manual Review</th>
-            </tr>
-        </thead>
-        <tbody>
+    <h1>Undervalued Tickers Screener — Full Factor Score Breakdown</h1>
+    <div class="subtitle">Universe: <b>{universe_label}</b> | Total Scanned: {n_total_universe if n_total_universe else len(df)} | Showing Top {len(df)}</div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Company</th>
+                    <th>Sector</th>
+                    <th>Price</th>
+                    <th class="score-col">Composite Score</th>
+                    <th>P/E</th>
+                    <th>P/E Score (2x)</th>
+                    <th>Hist. P/E Med</th>
+                    <th>P/E vs Hist</th>
+                    <th>Hist P/E Score (2x)</th>
+                    <th>Vol Ratio</th>
+                    <th>Low Vol Score (2x)</th>
+                    <th>Drawdown</th>
+                    <th>Pullback Score (2x)</th>
+                    <th>PEG</th>
+                    <th>PEG Score</th>
+                    <th>Fwd P/E</th>
+                    <th>P/E Trend Score</th>
+                    <th>FCF Yield</th>
+                    <th>FCF Score</th>
+                    <th>D/E</th>
+                    <th>D/E Score</th>
+                    <th>ROE</th>
+                    <th>ROE Score</th>
+                    <th>Sector P/E Ratio</th>
+                    <th>Sector P/E Score</th>
+                    <th>Payout Ratio</th>
+                    <th>Payout Score</th>
+                    <th>Manual Review Notes</th>
+                </tr>
+            </thead>
+            <tbody>
 """
-    for _, row in df.iterrows():
-        ticker = row.get("ticker", "")
-        company = row.get("company", "") or ""
-        sector = row.get("sector", "") or ""
+
+    def render_flag(val):
+        if pd.isna(val):
+            return "<td>-</td>"
+        val_f = float(val)
+        cls = "flag-good" if val_f >= 1.0 else ("flag-mid" if val_f >= 0.5 else "flag-bad")
+        return f'<td class="{cls}">{val_f:.1f}</td>'
+
+    for _, row in report_df.iterrows():
+        t = row.get("ticker", "")
+        comp = row.get("company", "") or ""
+        sec = row.get("sector", "") or ""
         price = f"${row['price']:.2f}" if pd.notna(row.get("price")) else "N/A"
-        pe = f"{row['trailing_pe']:.1f}" if pd.notna(row.get("trailing_pe")) else "N/A"
-        fwd_pe = f"{row['forward_pe']:.1f}" if pd.notna(row.get("forward_pe")) else "N/A"
-        dd = f"{row['drawdown_from_high']*100:.1f}%" if pd.notna(row.get("drawdown_from_high")) else "N/A"
-        vol_r = f"{row['volume_ratio']:.2f}" if pd.notna(row.get("volume_ratio")) else "N/A"
-        score = f"{row['composite_score']:.1f}" if pd.notna(row.get("composite_score")) else "0.0"
+        comp_score = f"{row.get('composite_score', 0):.1f}"
+
+        pe = f"{row.get('trailing_pe', np.nan):.1f}" if pd.notna(row.get("trailing_pe")) else "N/A"
+        f_pe = render_flag(row.get("flag_pe_cheap"))
+
+        h_med = f"{row.get('historical_median_pe', np.nan):.1f}" if pd.notna(row.get("historical_median_pe")) else "N/A"
+        pe_hist = f"{row.get('pe_vs_history_ratio', np.nan):.2f}" if pd.notna(row.get("pe_vs_history_ratio")) else "N/A"
+        f_hist = render_flag(row.get("flag_historical_cheap"))
+
+        v_rat = f"{row.get('volume_ratio', np.nan):.2f}" if pd.notna(row.get("volume_ratio")) else "N/A"
+        f_vol = render_flag(row.get("flag_low_volume"))
+
+        dd = f"{row.get('drawdown_from_high', 0)*100:.1f}%" if pd.notna(row.get("drawdown_from_high")) else "N/A"
+        f_pb = render_flag(row.get("flag_pullback_10_20"))
+
+        peg = f"{row.get('peg', np.nan):.2f}" if pd.notna(row.get("peg")) else "N/A"
+        f_peg = render_flag(row.get("flag_peg"))
+
+        fwd_pe = f"{row.get('forward_pe', np.nan):.1f}" if pd.notna(row.get("forward_pe")) else "N/A"
+        f_trend = render_flag(row.get("flag_pe_trend"))
+
+        fcf = f"{row.get('fcf_yield', 0)*100:.1f}%" if pd.notna(row.get("fcf_yield")) else "N/A"
+        f_fcf = render_flag(row.get("flag_fcf_yield"))
+
+        de = f"{row.get('debt_equity', np.nan):.2f}" if pd.notna(row.get("debt_equity")) else "N/A"
+        f_de = render_flag(row.get("flag_debt_equity"))
+
+        roe = f"{row.get('roe', 0)*100:.1f}%" if pd.notna(row.get("roe")) else "N/A"
+        f_roe = render_flag(row.get("flag_roe"))
+
+        sec_pe = f"{row.get('pe_vs_sector_ratio', np.nan):.2f}" if pd.notna(row.get("pe_vs_sector_ratio")) else "N/A"
+        f_sec = render_flag(row.get("flag_pe_vs_sector"))
+
+        payout = f"{row.get('payout_ratio', 0)*100:.1f}%" if pd.notna(row.get("payout_ratio")) else "N/A"
+        f_pay = render_flag(row.get("flag_payout_sustainable"))
+
         review = row.get("needs_manual_review", "")
 
         html_content += f"""
             <tr>
-                <td><b>{ticker}</b></td>
-                <td>{company}</td>
-                <td>{sector}</td>
+                <td><b>{t}</b></td>
+                <td>{comp}</td>
+                <td>{sec}</td>
                 <td>{price}</td>
+                <td class="score-col"><b>{comp_score}</b></td>
                 <td>{pe}</td>
-                <td>{fwd_pe}</td>
+                {f_pe}
+                <td>{h_med}</td>
+                <td>{pe_hist}</td>
+                {f_hist}
+                <td>{v_rat}</td>
+                {f_vol}
                 <td>{dd}</td>
-                <td>{vol_r}</td>
-                <td><b>{score}</b></td>
+                {f_pb}
+                <td>{peg}</td>
+                {f_peg}
+                <td>{fwd_pe}</td>
+                {f_trend}
+                <td>{fcf}</td>
+                {f_fcf}
+                <td>{de}</td>
+                {f_de}
+                <td>{roe}</td>
+                {f_roe}
+                <td>{sec_pe}</td>
+                {f_sec}
+                <td>{payout}</td>
+                {f_pay}
                 <td>{review}</td>
             </tr>
 """
 
     html_content += """
-        </tbody>
-    </table>
+            </tbody>
+        </table>
+    </div>
 </body>
 </html>
 """
@@ -469,14 +570,10 @@ def main():
 
     out_path = Path(args.output)
     display_cols = [
-        "ticker", "company", "sector", "market_cap", "price",
-        "trailing_pe", "forward_pe", "peg", "pb", "debt_equity", "roe",
-        "dividend_yield", "payout_ratio", "fcf_yield", "short_pct_float",
-        "drawdown_from_high", "pullback_10_20_flag",
-        "volume_ratio", "low_volume_flag",
-        "pe_vs_history_ratio", "pe_vs_sector_ratio",
-        "high_short_interest_caution", "composite_score",
-        "score_components_available", "needs_manual_review",
+        "ticker", "composite_score", "trailing_pe", "flag_pe_cheap", 
+        "pe_vs_history_ratio", "flag_historical_cheap", 
+        "volume_ratio", "flag_low_volume", 
+        "drawdown_from_high", "flag_pullback_10_20"
     ]
     display_cols = [c for c in display_cols if c in top.columns]
 
@@ -493,8 +590,8 @@ def main():
         top[display_cols].to_excel(out_path, index=False, sheet_name="Scan Results")
 
     print(f"\nScored {len(scored)} tickers. Wrote top {len(top)} to {out_path}\n")
-    with pd.option_context("display.max_columns", 10, "display.width", 160):
-        print(top[["ticker", "trailing_pe", "drawdown_from_high", "volume_ratio", "composite_score"]].head(20))
+    with pd.option_context("display.max_columns", 12, "display.width", 160):
+        print(top[display_cols].head(20))
 
 
 if __name__ == "__main__":
