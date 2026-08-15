@@ -63,6 +63,16 @@ VOL_RATIO_FLAG = 0.85
 PULLBACK_LO, PULLBACK_HI = 0.10, 0.20
 
 NASDAQ_LISTED_URL = "https://ftp.nasdaqtrader.com/dynamiclookup/nasdaqlisted.txt"
+# nasdaqtrader.com's FTP-over-HTTPS endpoint has repeatedly connect-timed-out
+# from GitHub-hosted Actions runners (not just transient -- it's failed the
+# same way on back-to-back scheduled/manual runs), which retries alone can't
+# fix if the host is simply not accepting connections from that IP range.
+# This is a community-maintained, daily-refreshed mirror of the same listing,
+# served from raw.githubusercontent.com -- reachable from GitHub Actions
+# runners since it's on GitHub's own network. It's ticker symbols only (no
+# Test-Issue/ETF flags), so the fallback path can't filter out ETFs the way
+# the primary source does -- see the filtering note below.
+NASDAQ_FALLBACK_URL = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/nasdaq/nasdaq_tickers.json"
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 UNIVERSE_FETCH_RETRIES = 3
@@ -106,7 +116,7 @@ def get_sp500_tickers() -> list[str]:
     return sorted(tickers.unique().tolist())
 
 
-def get_nasdaq_composite_tickers() -> list[str]:
+def _get_nasdaq_composite_tickers_primary() -> list[str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -119,16 +129,50 @@ def get_nasdaq_composite_tickers() -> list[str]:
     return sorted(tickers.unique().tolist())
 
 
-def build_universe(name: str) -> list[str]:
+def _get_nasdaq_composite_tickers_fallback() -> list[str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    resp = _http_get_with_retries(NASDAQ_FALLBACK_URL, headers, name="Nasdaq Composite list (GitHub mirror)")
+    raw_tickers = resp.json()
+    tickers = pd.Series(raw_tickers, dtype=str).str.strip()
+    tickers = tickers[~tickers.str.contains(r"[\.\$]", regex=True)]
+    return sorted(tickers.unique().tolist())
+
+
+def get_nasdaq_composite_tickers() -> list[str]:
+    try:
+        return _get_nasdaq_composite_tickers_primary()
+    except Exception as primary_err:
+        log.warning(
+            "Primary Nasdaq source (nasdaqtrader.com) failed after retries (%s); "
+            "trying the GitHub-hosted mirror instead.", primary_err,
+        )
+        try:
+            return _get_nasdaq_composite_tickers_fallback()
+        except Exception as fallback_err:
+            raise RuntimeError(
+                f"Both Nasdaq ticker sources failed -- primary (nasdaqtrader.com): {primary_err}; "
+                f"fallback (GitHub mirror): {fallback_err}"
+            ) from fallback_err
+
+
+def build_universe(name: str) -> tuple[list[str], str | None]:
+    """Returns (tickers, degraded_note). degraded_note is None when the
+    requested universe was fetched in full; otherwise it's a short,
+    user-facing sentence explaining what's missing and why, so the report
+    can say so honestly instead of silently labeling a partial scan as if
+    it were the full 'both' universe."""
     if name == "sp500":
-        return get_sp500_tickers()
+        return get_sp500_tickers(), None
     if name == "nasdaq":
-        return get_nasdaq_composite_tickers()
+        return get_nasdaq_composite_tickers(), None
     if name == "both":
         # Two independent third-party sources -- don't let one flaky host
-        # sink the whole "both" run. Each is retried on its own above; if a
-        # source still fails after retries, log it and scan whatever
-        # universe(s) did come through instead of exiting with nothing.
+        # sink the whole "both" run. Each is retried (and, for Nasdaq,
+        # falls back to a mirror) above; if a source still fails
+        # completely, log it and scan whatever universe(s) did come
+        # through instead of exiting with nothing.
         sp500: list[str] = []
         nasdaq: list[str] = []
         sp500_err: Exception | None = None
@@ -148,11 +192,16 @@ def build_universe(name: str) -> list[str]:
             raise RuntimeError(
                 f"Both universe sources failed -- sp500: {sp500_err}; nasdaq: {nasdaq_err}"
             )
+        note = None
         if sp500_err or nasdaq_err:
             missing = ("S&P 500" if sp500_err else "") + (" and " if sp500_err and nasdaq_err else "") + ("Nasdaq Composite" if nasdaq_err else "")
-            print(f"WARNING: 'both' universe is missing {missing} this run (source unreachable) -- "
-                  f"scanning {'only ' if (sp500_err or nasdaq_err) else ''}what did come through.", file=sys.stderr)
-        return sorted(set(sp500) | set(nasdaq))
+            note = (
+                f"You asked for 'both', but the {missing} ticker list was unreachable this run (even after "
+                f"retries{' and a fallback mirror' if nasdaq_err else ''}) -- this scan only covers "
+                f"{'Nasdaq Composite' if sp500_err else 'S&P 500'}, not the full combined universe."
+            )
+            print(f"WARNING: {note}", file=sys.stderr)
+        return sorted(set(sp500) | set(nasdaq)), note
     raise ValueError(f"unknown universe {name!r}")
 
 
@@ -388,11 +437,12 @@ def main():
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
 
+    universe_note = None
     if args.demo:
         print("Running in --demo mode...")
         raw = demo_dataframe()
     else:
-        tickers = build_universe(args.universe)
+        tickers, universe_note = build_universe(args.universe)
         if args.limit:
             random.shuffle(tickers)
             tickers = tickers[: args.limit]
@@ -410,6 +460,7 @@ def main():
         universe_label="demo sample" if args.demo else args.universe,
         is_demo=args.demo,
         n_total_universe=len(scored) if not args.demo else None,
+        universe_note=universe_note,
     )
     print(f"\nDashboard generated successfully at: {args.output}\n")
 
