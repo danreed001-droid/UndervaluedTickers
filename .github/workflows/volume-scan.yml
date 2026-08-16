@@ -1,0 +1,53 @@
+name: Volume Scan
+
+on:
+  schedule:
+    # Every weekday at 22:00 UTC (after the US market close, once Yahoo's
+    # end-of-day volume figures have settled).
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # Bumped from 90 -> 120 to leave headroom for the second scan
+    # (dual-timeframe watchlist report, ~650 tickers x 2 timeframes) below.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run volume scan
+        run: python scripts/scan_volume.py
+
+      - name: Run dual-timeframe watchlist scan
+        # continue-on-error so a hiccup in this second scan (e.g. a bad
+        # Yahoo Finance day) never blocks committing the primary volume
+        # scan's report above -- this script already handles individual
+        # ticker failures internally and only errors out on something
+        # unexpected.
+        continue-on-error: true
+        run: python scripts/dual_timeframe_scan.py -o reports/dual_timeframe_latest.html
+
+      - name: Commit and push report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update volume report ($(date -u +%F))"
+            git push
+          fi
